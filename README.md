@@ -60,10 +60,10 @@ Dashboard blocks:
 ## Screenshots
 | Simulation Wiring | Serial Monitor | Adafruit Dashboard | Hardware |
 |---|---|---|---|
-|<img width="679" height="432" alt="Screenshot 2026-02-27 at 4 33 17 PM" src="https://github.com/user-attachments/assets/8896d054-6831-47d4-a49d-9b112ee8ff71" />
-| <img width="354" height="165" alt="Screenshot 2026-02-27 at 4 33 27 PM" src="https://github.com/user-attachments/assets/46583795-8ff1-4c49-998e-8d3545192036" />
- | <img width="1320" height="446" alt="Screenshot 2026-02-27 at 4 34 12 PM" src="https://github.com/user-attachments/assets/9d17e591-0dd4-43f5-a7eb-db9ac3eb2a5b" />
- |
+| <img width="679" height="432" alt="Screenshot 2026-02-27 at 4 33 17 PM" src="https://github.com/user-attachments/assets/8896d054-6831-47d4-a49d-9b112ee8ff71" /> |
+| <img width="354" height="165" alt="Screenshot 2026-02-27 at 4 33 27 PM" src="https://github.com/user-attachments/assets/46583795-8ff1-4c49-998e-8d3545192036" /> |
+| <img width="1320" height="446" alt="Screenshot 2026-02-27 at 4 34 12 PM" src="https://github.com/user-attachments/assets/9d17e591-0dd4-43f5-a7eb-db9ac3eb2a5b" /> |
+ 
 
 
 ## License
