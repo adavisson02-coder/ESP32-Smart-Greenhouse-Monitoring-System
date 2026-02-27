@@ -1,0 +1,226 @@
+#include <WiFi.h>
+#include "DHTesp.h"
+#include "Adafruit_MQTT.h"
+#include "Adafruit_MQTT_Client.h"
+
+// ------------------- USER SETTINGS -------------------
+#define WIFI_SSID     "Wokwi-GUEST"
+#define WIFI_PASS     ""
+
+#define AIO_SERVER      "io.adafruit.com"
+#define AIO_SERVERPORT  1883
+
+// TODO: put your Adafruit IO username/key here:
+#define AIO_USERNAME  "AUStin_D1979"
+#define AIO_KEY       "key"
+
+// ------------------- PINS -------------------
+static const int PIN_DHT   = 13;
+
+static const int PIN_LDR   = 34;  // ADC
+static const int PIN_SOIL  = 35;  // ADC (potentiometer in Wokwi)
+
+static const int PIN_LED   = 18;
+static const int PIN_BUZZ  = 19;
+
+// ------------------- THRESHOLDS (edit as desired) -------------------
+// Soil: 0..4095 from ADC. With pot: 0=dry, 4095=wet (you can invert if you want)
+static const int  SOIL_DRY_THRESHOLD = 1600; // below = dry
+
+// Light: 0..4095 ADC. Higher = brighter (depends on divider/wiring)
+static const int  LIGHT_LOW_THRESHOLD = 1200; // below = dark/low light
+
+static const float TEMP_HIGH_C = 30.0;        // above = too hot
+static const float HUM_LOW_PCT = 30.0;        // below = too dry air
+
+// ------------------- DHT -------------------
+DHTesp dht;
+
+// ------------------- WIFI + MQTT -------------------
+WiFiClient client;
+Adafruit_MQTT_Client mqtt(&client, AIO_SERVER, AIO_SERVERPORT, AIO_USERNAME, AIO_KEY);
+
+// Feeds
+Adafruit_MQTT_Publish feed_temp   = Adafruit_MQTT_Publish(&mqtt, AIO_USERNAME "/feeds/temp");
+Adafruit_MQTT_Publish feed_hum    = Adafruit_MQTT_Publish(&mqtt, AIO_USERNAME "/feeds/hum");
+Adafruit_MQTT_Publish feed_light  = Adafruit_MQTT_Publish(&mqtt, AIO_USERNAME "/feeds/light");
+Adafruit_MQTT_Publish feed_soil   = Adafruit_MQTT_Publish(&mqtt, AIO_USERNAME "/feeds/soil");
+Adafruit_MQTT_Publish feed_status = Adafruit_MQTT_Publish(&mqtt, AIO_USERNAME "/feeds/status");
+Adafruit_MQTT_Publish feed_json   = Adafruit_MQTT_Publish(&mqtt, AIO_USERNAME "/feeds/json");
+
+// ------------------- HELPERS -------------------
+void connectWiFi() {
+
+  Serial.println("Connecting to WiFi...");
+
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+
+  int timeout = 0;
+
+  while (WiFi.status() != WL_CONNECTED && timeout < 20) {
+
+    delay(500);
+    Serial.print(".");
+    timeout++;
+
+  }
+
+  if (WiFi.status() == WL_CONNECTED) {
+
+    Serial.println("");
+    Serial.println("WiFi connected!");
+
+  } else {
+
+    Serial.println("");
+    Serial.println("WiFi FAILED - continuing anyway");
+
+  }
+}
+
+void connectMQTT() {
+  Serial.print("Connecting to Adafruit IO (MQTT)...");
+  int8_t ret;
+
+  // If already connected, return
+  if (mqtt.connected()) {
+    Serial.println(" already connected.");
+    return;
+  }
+
+  // Attempt to connect
+  uint8_t retries = 5;
+  while ((ret = mqtt.connect()) != 0) {
+    Serial.println(mqtt.connectErrorString(ret));
+    Serial.println("Retrying MQTT connection in 3 seconds...");
+    mqtt.disconnect();
+    delay(3000);
+    retries--;
+    if (retries == 0) {
+      Serial.println("MQTT failed. Check AIO username/key.");
+      return;
+    }
+  }
+  Serial.println(" connected!");
+}
+
+// Simple buzzer chirp
+void beep(int ms = 120) {
+  digitalWrite(PIN_BUZZ, HIGH);
+  delay(ms);
+  digitalWrite(PIN_BUZZ, LOW);
+}
+
+// Make a compact JSON string (no external JSON lib required)
+String makeJSON(float tC, float h, int lightRaw, int soilRaw, const String& statusMsg) {
+  String s = "{";
+  s += "\"tempC\":" + String(tC, 2) + ",";
+  s += "\"hum\":" + String(h, 2) + ",";
+  s += "\"light\":" + String(lightRaw) + ",";
+  s += "\"soil\":" + String(soilRaw) + ",";
+  s += "\"status\":\"" + statusMsg + "\"";
+  s += "}";
+  return s;
+}
+
+void setup() {
+  Serial.begin(115200);
+  delay(1000);
+  Serial.println("BOOT OK - Serial working");
+  pinMode(PIN_LED, OUTPUT);
+  pinMode(PIN_BUZZ, OUTPUT);
+  digitalWrite(PIN_LED, LOW);
+  digitalWrite(PIN_BUZZ, LOW);
+
+  dht.setup(PIN_DHT, DHTesp::DHT22);
+
+  connectWiFi();
+  connectMQTT();
+
+  Serial.println("System ready.");
+}
+
+unsigned long lastSend = 0;
+
+void loop() {
+  // Keep MQTT alive
+  if (WiFi.status() != WL_CONNECTED) { 
+  connectWiFi();
+  connectMQTT();
+  mqtt.processPackets(10);
+  mqtt.ping();
+  }
+  // Sample & publish every 5 seconds
+  if (millis() - lastSend >= 5000) {
+    lastSend = millis();
+
+    // Read DHT
+   TempAndHumidity data = dht.getTempAndHumidity();
+
+    float tempC = data.temperature;
+    float hum   = data.humidity;
+
+    if (isnan(tempC) || isnan(hum)) {
+
+    Serial.println("DHT read failed!");
+
+    tempC = 0;
+    hum = 0;
+
+    }
+
+    // Read analog sensors
+    int lightRaw = analogRead(PIN_LDR);
+    int soilRaw  = analogRead(PIN_SOIL);
+
+    // -------- Decision Logic --------
+    bool soilDry   = (soilRaw < SOIL_DRY_THRESHOLD);
+    bool lowLight  = (lightRaw < LIGHT_LOW_THRESHOLD);
+    bool tooHot    = (tempC > TEMP_HIGH_C);
+    bool lowHum    = (hum < HUM_LOW_PCT);
+
+    String statusMsg = "OK";
+
+    // Priority-based messages
+    if (soilDry) statusMsg = "ALERT: Soil dry - water plant";
+    else if (tooHot) statusMsg = "ALERT: Temperature high - ventilate";
+    else if (lowHum) statusMsg = "WARN: Humidity low";
+    else if (lowLight) statusMsg = "WARN: Light low";
+
+    // Outputs (LED + buzzer)
+    if (soilDry || tooHot) {
+      digitalWrite(PIN_LED, HIGH);
+      beep(120);
+    } else if (lowHum || lowLight) {
+      // LED on but no beep for warnings (optional)
+      digitalWrite(PIN_LED, HIGH);
+      delay(30);
+      digitalWrite(PIN_LED, LOW);
+    } else {
+      digitalWrite(PIN_LED, LOW);
+    }
+
+    // -------- Publish to Adafruit IO --------
+    // If MQTT is not connected, skip publish but still print.
+    if (mqtt.connected()) {
+      feed_temp.publish(tempC);
+      feed_hum.publish(hum);
+      feed_light.publish((int32_t)lightRaw);
+      feed_soil.publish((int32_t)soilRaw);
+      feed_status.publish(statusMsg.c_str());
+
+      String json = makeJSON(tempC, hum, lightRaw, soilRaw, statusMsg);
+      feed_json.publish(json.c_str());
+    }
+
+    // Serial output for grading/demo
+    Serial.println("---- Smart Greenhouse Readings ----");
+    Serial.print("Temp (C): "); Serial.println(tempC, 2);
+    Serial.print("Hum (%):  "); Serial.println(hum, 2);
+    Serial.print("Light ADC: "); Serial.println(lightRaw);
+    Serial.print("Soil ADC:  "); Serial.println(soilRaw);
+    Serial.print("Status:    "); Serial.println(statusMsg);
+    Serial.println("----------------------------------\n");
+  }
+}
